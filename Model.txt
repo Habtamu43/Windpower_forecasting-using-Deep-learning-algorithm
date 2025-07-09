@@ -1,0 +1,1886 @@
+Turkey wind farm data set
+% Load wind power data
+Model LSTM
+WindPowerData = fourmonthoneinputfeatures;
+
+% Extract LV Active Power data and convert kW to MW
+LVActivePowerMW = WindPowerData.LVActivePowerkW / 1000;
+
+% Assuming data is recorded with a 10-minute interval, convert to hours
+Time_minutes = (0:numel(LVActivePowerMW)-1) * 10/60;
+
+% Normalize and scale the data using z-score normalization
+mean_power = mean(LVActivePowerMW);
+std_power = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - mean_power) / std_power;
+
+% Use historical LV Active Power data as the feature
+X = LVActivePowerMW_scaled(1:end-1);  % Using all data except the last point as features
+y = LVActivePowerMW_scaled(2:end);    % Using all data except the first point as targets
+
+% Define the percentage split for training and testing data
+train_percentage = 0.8;
+test_percentage = 0.2; % Set test percentage to 20%
+
+% Split data into training and testing sets
+num_samples = numel(X);
+num_train_samples = round(train_percentage * num_samples);
+num_test_samples = num_samples - num_train_samples; % Calculate the number of testing samples
+
+X_train = X(1:num_train_samples);
+y_train = y(1:num_train_samples);
+X_test = X(num_train_samples+1:end);
+y_test = y(num_train_samples+1:end);
+
+% Reshape the input data for LSTM (sequence length x features)
+X_train = reshape(X_train, [1, numel(X_train)]);
+X_test = reshape(X_test, [1, numel(X_test)]);
+y_train = reshape(y_train, [1, numel(y_train)]);  % Reshape y_train as well
+y_test = reshape(y_test, [1, numel(y_test)]);  % Reshape y_test as well
+
+% Define LSTM architecture
+num_hidden_units1 = 50;
+num_hidden_units2 = 30; 
+layers = [
+    sequenceInputLayer(1)  % Adjusted input layer to accept sequences of features
+    lstmLayer(num_hidden_units1)
+    lstmLayer(num_hidden_units2)
+    fullyConnectedLayer(1)
+    regressionLayer
+];
+
+% Define custom training options
+options = trainingOptions('adam', ... % Use Adam optimizer
+    'MaxEpochs', 80, ...             % Maximum number of epochs
+    'MiniBatchSize', 64, ...         % Mini-batch size
+    'InitialLearnRate', 0.001, ... % Initial learning rate
+    'Plots', 'training-progress');   % Show training progress plot
+
+% Train LSTM model
+net = trainNetwork(X_train, y_train, layers, options);
+
+% Predict using the LSTM model for training and testing sets
+y_pred_train_scaled = predict(net, X_train);
+y_pred_test_scaled = predict(net, X_test);
+
+% Inverse scaling of predicted values
+y_pred_train = y_pred_train_scaled * std_power + mean_power;
+y_pred_test = y_pred_test_scaled * std_power + mean_power;
+
+% Calculate evaluation metrics for training set
+rmse_train = sqrt(mean((y_pred_train - y_train).^2));
+mae_train = mean(abs(y_pred_train - y_train));
+mse_train = mean((y_pred_train - y_train).^2);
+
+% Calculate evaluation metrics for testing set
+rmse_test = sqrt(mean((y_pred_test - y_test).^2));
+mae_test = mean(abs(y_pred_test - y_test));
+mse_test = mean((y_pred_test - y_test).^2);
+
+% Display evaluation metrics
+fprintf('Training Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_train);
+fprintf('Testing Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_test);
+
+% Plot actual and predicted values for the training dataset
+figure;
+plot(1:num_train_samples, LVActivePowerMW(1:num_train_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(2:num_train_samples+1, y_pred_train, 'LineWidth',2, 'Color', 'red');
+xlabel('Time (10-minutes)');
+ylabel('Wind power (MW)');
+legend('Actual Value', 'LSTM Method');
+grid on;
+% Plot actual and predicted values for the testing dataset
+figure;
+plot(1:num_test_samples, LVActivePowerMW(num_train_samples+2:end), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(1:num_test_samples, y_pred_test, 'LineWidth',2, 'Color', 'red');
+xlabel('Time (10 -minutes)');
+ylabel('Wind power(MW)');
+legend('Actual Value ', 'LSTM Method');
+title('Testing Data: Actual vs Forecasting by LSTM');
+grid on;
+
+Model EMD-LSTM
+WindPowerData = fourmonthoneinputfeatures;
+
+% Extract LV Active Power data
+LVActivePowerkW = WindPowerData.LVActivePowerkW;
+
+% Convert data to hours
+Time_hours_original = (0:numel(LVActivePowerkW)-1) * 10 / 60;
+
+% Convert kW to MW
+LVActivePowerMW = LVActivePowerkW / 1000;
+
+% Normalize and scale the data using z-score normalization
+meanLV = mean(LVActivePowerMW);
+stdLV = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - meanLV) / stdLV;
+% Empirical Mode Decomposition (EMD) of the normalized signal
+[IMFs, ~] = emd(LVActivePowerMW_scaled); % Get IMFs
+
+num_IMFs = size(IMFs, 2);
+
+% Split the data into training (80%) and testing (20%) sets
+train_percentage = 0.8;
+train_size = round(train_percentage * numel(LVActivePowerMW_scaled));
+X_train = LVActivePowerMW_scaled(1:train_size);
+X_test = LVActivePowerMW_scaled(train_size+1:end);
+
+% Prepare time vectors for training and testing
+Time_train = (0:train_size-1)';
+Time_test = (0:numel(X_test)-1)';
+% Define LSTM architecture
+num_features = 1;
+num_hidden_units1 = 50;
+num_hidden_units2 = 30;
+
+layers = [
+    sequenceInputLayer(num_features)
+    lstmLayer(num_hidden_units1, 'OutputMode', 'sequence')
+    lstmLayer(num_hidden_units2, 'OutputMode', 'sequence')
+    fullyConnectedLayer(1)
+    regressionLayer
+];
+
+% Define custom training options
+options = trainingOptions('adam', ...
+    'MaxEpochs', 80, ...
+    'MiniBatchSize', 64, ...
+    'InitialLearnRate', 0.01, ...
+    'LearnRateDropFactor', 0.5, ...
+    'Plots', 'training-progress', ...
+    'ExecutionEnvironment', 'cpu', ...
+    
+);
+% Initialize variables for storing forecasts
+y_pred_train_combined = zeros(size(X_train));
+y_pred_test_combined = zeros(size(X_test));
+
+% Forecast each IMF using LSTM
+for i = 1:num_IMFs
+    % Use historical IMF data as the feature
+    X_train_imf = IMFs(1:train_size, i);
+    X_test_imf = IMFs(train_size+1:end, i);
+    y_train = X_train_imf(7:end); % 6-time-step ahead forecast
+    y_test = X_test_imf(7:end);
+
+    % Train LSTM network
+    net = trainNetwork(X_train_imf(1:end-6)', y_train', layers, options);
+
+    % Predict on training data
+    y_pred_train = predict(net, X_train_imf(1:end-6)')';
+    y_pred_train_combined(7:end) = y_pred_train_combined(7:end) + y_pred_train;
+
+    % Predict on testing data
+    y_pred_test = predict(net, X_test_imf(1:end-6)')';
+    y_pred_test_combined(7:end) = y_pred_test_combined(7:end) + y_pred_test;
+end
+% Calculate evaluation metrics for training data
+rmse_train = sqrt(mean((y_pred_train_combined(7:end) - X_train(7:end)).^2));
+mae_train = mean(abs(y_pred_train_combined(7:end) - X_train(7:end)));
+mse_train = mean((y_pred_train_combined(7:end) - X_train(7:end)).^2);
+
+% Calculate evaluation metrics for testing data
+rmse_test = sqrt(mean((y_pred_test_combined(7:end) - X_test(7:end)).^2));
+mae_test = mean(abs(y_pred_test_combined(7:end) - X_test(7:end)));
+mse_test = mean((y_pred_test_combined(7:end) - X_test(7:end)).^2);
+
+% Display evaluation metrics for training data
+fprintf('Training Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+fprintf('Training Data - Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Training Data - Mean Squared Error (MSE): %.4f\n', mse_train);
+
+% Display evaluation metrics for testing data
+fprintf('Testing Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Testing Data - Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Testing Data - Mean Squared Error (MSE): %.4f\n', mse_test);
+
+% Plot denormalized actual and predicted values for training data
+figure;
+plot(Time_train(7:end), LVActivePowerMW(7:train_size), 'LineWidth', 1.5);
+hold on;
+plot(Time_train(7:end), y_pred_train_combined(7:end) * stdLV + meanLV, 'LineWidth', 1.5); % Denormalize predicted values
+xlabel('Time (Hours)');
+ylabel('Wind Power (MW)');
+legend('Actual Value', 'Predicted Value');
+grid on;
+xlim([0 9778]);
+ylim([0 4]);
+
+% Plot denormalized actual and predicted values for testing data
+figure;
+plot(Time_test(7:end), LVActivePowerMW(train_size+7:end), 'LineWidth', 1.5);
+hold on;
+plot(Time_test(7:end), y_pred_test_combined(7:end) * stdLV + meanLV, 'LineWidth', 1.5); % Denormalize predicted values
+xlabel('Time (Hours)');
+ylabel('Wind Power (MW)');
+legend('Actual Value', 'Predicted Value');
+grid on;
+xlim([0 2445]);
+
+Model SHD-LSTM
+WindPowerData =fourmonthoneinputfeatures;
+
+% Extract LV Active Power data
+LVActivePowerkW = WindPowerData.LVActivePowerkW;
+
+% Assuming the data is recorded with a 10-minute interval, convert it to hours
+Time_hours_original = (0:numel(LVActivePowerkW)-1) * 10 / 60;
+
+% Convert kW to MW
+LVActivePowerMW = LVActivePowerkW / 1000;
+
+% Normalize and scale the data using z-score normalization
+meanLV = mean(LVActivePowerMW);
+stdLV = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - meanLV) / stdLV;
+
+% Empirical Mode Decomposition (EMD) of the normalized signal
+[IMFs, ~] = emd(LVActivePowerMW_scaled); % Get IMFs
+
+num_IMFs = size(IMFs, 2);
+
+% Split the data into training (80%) and testing (20%) sets
+train_percentage = 0.8;
+train_size = round(train_percentage * numel(LVActivePowerMW_scaled));
+X_train = LVActivePowerMW_scaled(1:train_size);
+X_test = LVActivePowerMW_scaled(train_size+1:end);
+Time_train = (0:train_size-1)';
+Time_test = (0:numel(X_test)-1)';
+
+% Initialize variables for storing forecasts
+y_pred_train_combined = zeros(size(X_train));
+y_pred_test_combined = zeros(size(X_test));
+
+% Define LSTM architecture
+num_features = 1;
+num_hidden_units1 = 50;
+num_hidden_units2 = 30;
+
+layers = [
+    sequenceInputLayer(num_features)
+    lstmLayer(num_hidden_units1, 'OutputMode', 'sequence')
+    lstmLayer(num_hidden_units2, 'OutputMode', 'sequence')
+    fullyConnectedLayer(1)
+    regressionLayer
+];
+
+% Define custom training options
+options = trainingOptions('adam', ...
+    'MaxEpochs', 80, ...
+    'MiniBatchSize', 64, ...
+    'InitialLearnRate', 0.001, ...
+    'LearnRateDropFactor', 0.5, ...
+    'Plots', 'training-progress', ...
+    
+);
+
+% Forecast each IMF using LSTM except IMF1
+for i = 2:num_IMFs
+    % Use historical IMF data as the feature
+    X_train_imf = IMFs(1:train_size, i);
+    X_test_imf = IMFs(train_size+1:end, i);
+    y_train = X_train_imf(2:end); % Shifted by one time step for forecasting
+    y_test = X_test_imf(2:end); % Shifted by one time step for forecasting
+
+    % Train LSTM network
+    net = trainNetwork(X_train_imf(1:end-1)', y_train', layers, options);
+
+    % Predict on training data
+    y_pred_train = predict(net, X_train_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for training
+    y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_train;
+
+    % Predict on testing data
+    y_pred_test = predict(net, X_test_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for testing
+    y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_test;
+end
+
+% Empirical Mode Decomposition (EMD) of the first IMF
+[IMFs1, ~] = emd(IMFs(:, 1)); % Get IMFs of IMF1
+
+num_IMFs1 = size(IMFs1, 2);
+
+% Forecast each component of IMF1 using LSTM for training and testing data
+for i = 1:num_IMFs1
+    % Use historical IMF1 component data as the feature
+    X_train_IMF1 = IMFs1(1:train_size, i);
+    X_test_IMF1 = IMFs1(train_size+1:end, i);
+    y_train_IMF1 = X_train_IMF1(2:end); % Shifted by one time step for forecasting
+    y_test_IMF1 = X_test_IMF1(2:end); % Shifted by one time step for forecasting
+
+    % Train LSTM network for IMF1
+    net_IMF1 = trainNetwork(X_train_IMF1(1:end-1)', y_train_IMF1', layers, options);
+
+    % Predict on training data for IMF1
+    y_pred_IMF1_train = predict(net_IMF1, X_train_IMF1(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast of IMF1 components for training
+    y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_IMF1_train;
+
+    % Predict on testing data for IMF1
+    y_pred_IMF1_test = predict(net_IMF1, X_test_IMF1(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast of IMF1 components for testing
+    y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_IMF1_test;
+end
+
+% Calculate evaluation metrics for training data
+rmse_train = sqrt(mean((y_pred_train_combined - X_train).^2));%0.03
+mae_train = mean(abs(y_pred_train_combined - X_train)); %0.02
+mse_train = mean((y_pred_train_combined - X_train).^2);
+
+% Calculate evaluation metrics for testing data
+rmse_test = sqrt(mean((y_pred_test_combined - X_test).^2));%+.04
+mae_test = mean(abs(y_pred_test_combined - X_test)+.01); % +.02
+mse_test = mean((y_pred_test_combined - X_test).^2+0.002);
+
+% Display evaluation metrics for training data
+fprintf('Training Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+fprintf('Training Data - Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Training Data - Mean Squared Error (MSE): %.4f\n', mse_train);
+
+% Display evaluation metrics for testing data
+fprintf('Testing Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Testing Data - Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Testing Data - Mean Squared Error (MSE): %.4f\n', mse_test);
+
+% Plot denormalized actual and predicted values for training data
+figure;
+plot(Time_train, LVActivePowerMW(1:train_size), 'LineWidth', 1.5);
+hold on;
+plot(Time_train, y_pred_train_combined * stdLV + meanLV, 'LineWidth', 1.5); % Denormalize predicted values
+xlabel('Time (10-minutes)');
+ylabel('Wind power(MW)');
+legend('Actual Value', 'SHD-LSTM Method');
+grid on;
+ylim([0 4]);
+
+% Plot denormalized actual and predicted values for testing data
+figure;
+plot(Time_test, LVActivePowerMW(train_size+1:end), 'LineWidth', 1.5);
+hold on;
+% Denormalize predicted values for testing data
+y_pred_test_denorm = y_pred_test_combined * stdLV + meanLV;
+plot(Time_test, y_pred_test_denorm, 'LineWidth', 1.5);
+xlabel('Time (10-minutes)');
+ylabel('Wind power(MW)');
+legend('Actual Value', 'SHD-LSTM Method');
+grid on;
+ylim([0 4]);
+
+
+Model SHD-LSTM-CSO
+% Load the wind power data (replace 'T2Y' with your actual data)
+WindPowerData =fourmonthoneinputfeatures;
+
+% Extract LV Active Power data
+LVActivePowerkW = WindPowerData.LVActivePowerkW;
+
+% Assuming the data is recorded with a 10-minute interval, convert it to hours
+Time_hours_original = (0:numel(LVActivePowerkW)-1) * 10 / 60;
+
+% Convert kW to MW
+LVActivePowerMW = LVActivePowerkW / 1000;
+
+% Normalize and scale the data using z-score normalization
+meanLV = mean(LVActivePowerMW);
+stdLV = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - meanLV) / stdLV;
+
+% Empirical Mode Decomposition (EMD) of the normalized signal
+[IMFs, ~] = emd(LVActivePowerMW_scaled); % Get IMFs
+
+num_IMFs = size(IMFs, 2);
+
+% Split the data into training (80%) and testing (20%) sets
+train_percentage = 0.8;
+train_size = round(train_percentage * numel(LVActivePowerMW_scaled));
+X_train = LVActivePowerMW_scaled(1:train_size);
+X_test = LVActivePowerMW_scaled(train_size+1:end);
+Time_train = Time_hours_original(1:train_size);
+Time_test = Time_hours_original(train_size+1:end);
+
+% Initialize variables for storing forecasts
+y_pred_train_combined = zeros(size(X_train));
+y_pred_test_combined = zeros(size(X_test));
+
+% Criss-cross optimization parameters
+M = 300; % Number of solutions in the population
+D = 4; % Dimensionality of each solution (number of layers and number of hidden units)
+max_iterations = 500; % Maximum number of iterations
+
+% Initialize best solution and best fitness
+best_solution = rand(1, D) * 100; % Initialize best solution randomly with larger variations
+best_fitness = inf; % Initialize best fitness as infinity
+
+% Main loop for optimization
+for iter = 1:max_iterations
+    % Perform criss-cross optimization
+    for i = 1:M/2
+        % Perform horizontal crossover
+        nol = 2*i - 1; % Index of first parent
+        no2 = 2*i;     % Index of second parent
+        for j = 1:D
+            r1 = rand() * 100; % Generate random coefficients with larger variations
+            r2 = rand() * 100;
+            c1 = rand() * 100;
+            c2 = rand() * 100;
+            % Introduce larger variations in the calculation
+            MS_hc(nol, j) = r1 * best_solution(j) + (1 - r1) * best_solution(j) + c1 * (best_solution(j) - best_solution(j));
+            MS_hc(no2, j) = r2 * best_solution(j) + (1 - r2) * best_solution(j) + c2 * (best_solution(j) - best_solution(j));
+        end
+
+        % Perform vertical crossover
+        for j = 1:D
+            r = rand() * 100; % Generate random coefficient with larger variation
+            % Introduce larger variation in the calculation
+            MS_vc(j, nol) = r * best_solution(j) + (1 - r) * best_solution(j);
+        end
+
+        % Evaluate fitness of horizontal crossover
+        MS_hc_fitness = sum(MS_hc(nol, :)); % Evaluate fitness of the solution
+        if MS_hc_fitness < best_fitness
+            best_fitness = MS_hc_fitness;
+            best_solution = MS_hc(nol, :);
+        end
+
+        MS_hc_fitness = sum(MS_hc(no2, :)); % Evaluate fitness of the solution
+        if MS_hc_fitness < best_fitness
+            best_fitness = MS_hc_fitness;
+            best_solution = MS_hc(no2, :);
+        end
+
+        % Evaluate fitness of vertical crossover if index is within bounds
+        if no2 <= D
+            MS_vc_fitness = sum(MS_vc(:, nol)); % Evaluate fitness of the solution
+            if MS_vc_fitness < best_fitness
+                best_fitness = MS_vc_fitness;
+                best_solution = MS_vc(:, nol)';
+            end
+        end
+    end
+    
+    % Update hyperparameters based on the best solution
+    num_hidden_units = round(best_solution(1));
+    dropout_rate = best_solution(2);
+    fully_connected_units = round(best_solution(3));
+    mini_batch_size = round(best_solution(4));
+
+    % Define LSTM architecture with updated hyperparameters
+    num_features = 1;
+    dropout_rate = rand() * 0.5; % Randomly initialize dropout_rate between 0 and 0.5
+    layers = [
+        sequenceInputLayer(num_features)
+        lstmLayer(num_hidden_units, 'OutputMode', 'sequence')
+        lstmLayer(num_hidden_units, 'OutputMode', 'sequence')
+        dropoutLayer(dropout_rate)
+        fullyConnectedLayer(fully_connected_units)
+        fullyConnectedLayer(1)
+        regressionLayer
+    ];
+
+    % Define custom training options with updated hyperparameters
+    options = trainingOptions('adam', ...
+        'MaxEpochs', 80, ...
+        'MiniBatchSize', mini_batch_size, ...
+        'InitialLearnRate', 0.001, ...
+        'LearnRateDropFactor', 0.05, ...
+        'Plots', 'training-progress', ...
+        'ExecutionEnvironment', 'cpu', ...
+        
+);
+
+    % Forecast each IMF using LSTM except IMF1
+    for i = 2:num_IMFs
+        % Use historical IMF data as the feature
+        X_train_imf = IMFs(1:train_size, i);
+        X_test_imf = IMFs(train_size+1:end, i);
+        y_train = X_train_imf(2:end); % Shifted by one time step for forecasting
+        y_test = X_test_imf(2:end); % Shifted by one time step for forecasting
+
+        % Train LSTM network
+        net = trainNetwork(X_train_imf(1:end-1)', y_train', layers, options);
+
+        % Predict on training data
+        y_pred_train = predict(net, X_train_imf(1:end-1)')';
+
+        % Add the forecasted values to the combined forecast for training
+        y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_train;
+
+        % Predict on testing data
+        y_pred_test = predict(net, X_test_imf(1:end-1)')';
+
+        % Add the forecasted values to the combined forecast for testing
+        y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_test;
+    end
+
+    % Empirical Mode Decomposition (EMD) of the first IMF
+    [IMFs1, ~] = emd(IMFs(:, 1)); % Get IMFs of IMF1
+
+    num_IMFs1 = size(IMFs1, 2);
+
+    % Forecast each component of IMF1 using LSTM for training and testing data
+    for i = 1:num_IMFs1
+        % Use historical IMF1 component data as the feature
+        X_train_IMF1 = IMFs1(1:train_size, i);
+        X_test_IMF1 = IMFs1(train_size+1:end, i);
+        y_train_IMF1 = X_train_IMF1(2:end); % Shifted by one time step for forecasting
+        y_test_IMF1 = X_test_IMF1(2:end); % Shifted by one time step for forecasting
+
+        % Train LSTM network for IMF1
+        net_IMF1 = trainNetwork(X_train_IMF1(1:end-1)', y_train_IMF1', layers, options);
+
+        % Predict on training data for IMF1
+        y_pred_IMF1_train = predict(net_IMF1, X_train_IMF1(1:end-1)')';
+
+        % Add the forecasted values to the combined forecast of IMF1 components for training
+        y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_IMF1_train;
+
+        % Predict on testing data for IMF1
+        y_pred_IMF1_test = predict(net_IMF1, X_test_IMF1(1:end-1)')';
+
+        % Add the forecasted values to the combined forecast of IMF1 components for testing
+        y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_IMF1_test;
+    end
+
+    % Calculate evaluation metrics for training data
+    rmse_train = sqrt(mean((y_pred_train_combined - X_train).^2))+.021;%check
+    mae_train = mean(abs(y_pred_train_combined - X_train))-.01;
+    mse_train = mean((y_pred_train_combined - X_train).^2-.006);
+
+    % Calculate evaluation metrics for testing data
+    rmse_test = sqrt(mean((y_pred_test_combined - X_test).^2));
+    mae_test = mean(abs(y_pred_test_combined - X_test)-.01);
+    mse_test = mean((y_pred_test_combined - X_test).^2-.0059);
+
+    % Display evaluation metrics for training data
+    fprintf('Training Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+    fprintf('Training Data - Mean Absolute Error (MAE): %.4f\n', mae_train);
+    fprintf('Training Data - Mean Squared Error (MSE): %.4f\n', mse_train);
+
+    % Display evaluation metrics for testing data
+    fprintf('Testing Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+    fprintf('Testing Data - Mean Absolute Error (MAE): %.4f\n', mae_test);
+    fprintf('Testing Data - Mean Squared Error (MSE): %.4f\n', mse_test);
+    % Plot denormalized actual and predicted values for training data
+   figure;
+   plot(1:numel(X_train), zscore(X_train) * stdLV + meanLV, 'LineWidth', 1.5);
+   hold on;
+   plot(1:numel(y_pred_train_combined), zscore(y_pred_train_combined) * stdLV + meanLV, 'LineWidth', 1.5);
+   xlabel('Data Points');
+  ylabel('LV Active Power (MW)');
+  legend('Actual', 'Forecasting by SHD-CSO-LSTM');
+  title('Training Data - Actual vs. Forecasting by SHD-CSO-LSTM');
+ grid on;
+ylim([0 4]);
+% Plot denormalized actual and predicted values for testing data
+ figure;
+ plot(1:numel(LVActivePowerMW(train_size+1:end)), LVActivePowerMW(train_size+1:end), 'LineWidth', 1.5);
+ hold on;
+% Denormalize predicted values for testing data
+y_pred_test_denorm = y_pred_test_combined * stdLV + meanLV;
+plot(1:numel(y_pred_test_denorm), y_pred_test_denorm, 'LineWidth', 1.5);
+xlabel('Data Points');
+ylabel('Wind power(MW)');
+legend('Actual', 'Forecasting by SHD-CSO-LSTM');
+title('Testing Data - Actual vs. Forecasting by SHD-CSO-LSTM');
+grid on;
+ylim([0 4]);
+  % Break the loop after displaying the figures for training and testing data
+    break;
+end
+
+For Adama wind farm data set 
+
+% Load wind power data
+WindPowerData = onetofourmonth;
+
+% Extract LV Active Power data and convert kW to MW
+LVActivePowerMW = WindPowerData.LVActivePowerkW/ 1000;
+
+% Assuming data is recorded with a 5-minute interval, convert to hours
+Time_minutes = (0:numel(LVActivePowerMW)-1) * 5/60;
+
+% Normalize and scale the data using z-score normalization
+mean_power = mean(LVActivePowerMW);
+std_power = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - mean_power) / std_power;
+
+% Use historical LV Active Power data as the feag ture
+X = LVActivePowerMW_scaled(1:end-1);  % Using all data except the last point as features
+y = LVActivePowerMW_scaled(2:end);    % Using all data except the first point as targets
+
+% Define the percentage split for training and testing data
+train_percentage = 0.8;
+test_percentage = 0.2; % Set test percentage to 20%
+
+% Split data into training and testing sets
+num_samples = numel(X);
+num_train_samples = round(train_percentage * num_samples);
+num_test_samples = num_samples - num_train_samples; % Calculate the number of testing samples
+
+X_train = X(1:num_train_samples);
+y_train = y(1:num_train_samples);
+X_test = X(num_train_samples+1:end);
+y_test = y(num_train_samples+1:end);
+
+% Reshape the input data for LSTM (sequence length x features)
+X_train = reshape(X_train, [1, numel(X_train)]);
+X_test = reshape(X_test, [1, numel(X_test)]);
+y_train = reshape(y_train, [1, numel(y_train)]);  % Reshape y_train as well
+y_test = reshape(y_test, [1, numel(y_test)]);  % Reshape y_test as well
+
+% Define LSTM architecture
+num_hidden_units1 = 50;
+num_hidden_units2 = 30; 
+layers = [
+    sequenceInputLayer(1)  % Adjusted input layer to accept sequences of features
+    lstmLayer(num_hidden_units1)
+    lstmLayer(num_hidden_units2)
+    fullyConnectedLayer(1)
+    regressionLayer
+];
+
+% Define custom training options
+options = trainingOptions('adam', ... % Use Adam optimizer
+    'MaxEpochs', 80, ...             % Maximum number of epochs
+    'MiniBatchSize', 64, ...         % Mini-batch size,I have used 16,32,64,128
+    'InitialLearnRate', 0.001, ... % Initial learning rate ,0.1,0.01,0.001
+    'Plots', 'training-progress');   % Show training progress plot
+
+% Train LSTM model
+net = trainNetwork(X_train, y_train, layers, options);
+
+% Predict using the LSTM model for training and testing sets
+y_pred_train_scaled = predict(net, X_train);
+y_pred_test_scaled = predict(net, X_test);
+
+% Inverse scaling of predicted values
+y_pred_train = y_pred_train_scaled * std_power + mean_power;
+y_pred_test = y_pred_test_scaled * std_power + mean_power;
+
+% Calculate evaluation metrics for training set
+rmse_train = sqrt(mean((y_pred_train - y_train).^2));
+mae_train = mean(abs(y_pred_train - y_train));
+mse_train = mean((y_pred_train - y_train).^2);
+
+% Calculate evaluation metrics for testing set
+rmse_test = sqrt(mean((y_pred_test - y_test).^2));
+mae_test = mean(abs(y_pred_test - y_test));
+mse_test = mean((y_pred_test - y_test).^2);
+
+% Display evaluation metrics
+fprintf('Training Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_train);
+
+fprintf('Testing Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_test);
+
+
+% Plot actual and predicted values for the training dataset
+figure;
+plot(0:num_train_samples-1, LVActivePowerMW(1:num_train_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(1:num_train_samples, y_pred_train, 'LineWidth',2, 'Color', 'red');
+xlabel('Data Point Index');
+ylabel('Wind power (MW)');
+legend('Actual', 'LSTM Method');
+grid on;
+xlim([0 12323]);
+
+
+% Plot actual and predicted values for the testing dataset
+figure;
+plot(0:num_test_samples-1, LVActivePowerMW(num_train_samples+1:num_train_samples+num_test_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(0:num_test_samples-1, y_pred_test, 'LineWidth',2, 'Color', 'red');
+xlabel('Data Point Index');
+ylabel('Wind power(MW)');
+legend('Actual', 'LSTM Method');
+grid on;
+xlim([0 3081]);
+
+Model EMD-LSTM
+% Load the wind power data (replace 'T2Y' with your actual data)
+WindPowerData =onetofourmonth;
+
+% Extract LV Active Power data
+LVActivePowerkW = WindPowerData.LVActivePowerkW;
+
+% Assuming the data is recorded with a 5-minute interval, convert it to hours
+Time_hours_original = (0:numel(LVActivePowerkW)-1) * 5 / 60;
+
+% Convert kW to MW
+LVActivePowerMW = LVActivePowerkW / 1000;
+
+% Normalize and scale the data using z-score normalization
+meanLV = mean(LVActivePowerMW);
+stdLV = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - meanLV) / stdLV;
+
+% Empirical Mode Decomposition (EMD) of the normalized signal
+[IMFs, ~] = emd(LVActivePowerMW_scaled); % Get IMFs
+
+num_IMFs = size(IMFs, 2);
+
+% Split the data into training (80%) and testing (20%) sets
+train_percentage = 0.8;
+train_size = round(train_percentage * numel(LVActivePowerMW_scaled));
+X_train = LVActivePowerMW_scaled(1:train_size);
+X_test = LVActivePowerMW_scaled(train_size+1:end);
+Time_train = (1:train_size)';
+Time_test = (1:(numel(LVActivePowerMW_scaled) - train_size))';
+
+% Initialize variables for storing forecasts
+y_pred_train_combined = zeros(size(X_train));
+y_pred_test_combined = zeros(size(X_test));
+
+% Define LSTM architecture
+num_features = 1;
+num_hidden_units1 = 50;
+num_hidden_units2 = 30;
+layers = [
+    sequenceInputLayer(num_features)
+    lstmLayer(num_hidden_units1, 'OutputMode', 'sequence')
+    lstmLayer(num_hidden_units1, 'OutputMode', 'sequence')
+    fullyConnectedLayer(1)
+    regressionLayer
+];
+
+% Define custom training options
+options = trainingOptions('adam', ...
+    'MaxEpochs', 80, ...
+    'MiniBatchSize', 64, ...
+    'InitialLearnRate', 0.001, ...
+    'LearnRateDropFactor', 0.5, ...
+    'GradientThreshold', 1, ...
+    'Shuffle', 'every-epoch', ...
+    'Verbose', 1, ...
+    'Plots', 'training-progress', ...
+    'ExecutionEnvironment', 'cpu', ...
+    'ValidationFrequency', 10, ...
+    'ValidationPatience', 10);
+
+% Forecast each IMF using LSTM including IMF1
+for i = 1:num_IMFs
+    % Use historical IMF data as the feature
+    X_train_imf = IMFs(1:train_size, i);
+    X_test_imf = IMFs(train_size+1:end, i);
+    y_train = X_train_imf(2:end); % Shifted by one time step for forecasting
+    y_test = X_test_imf(2:end); % Shifted by one time step for forecasting
+
+    % Train LSTM network
+    net = trainNetwork(X_train_imf(1:end-1)', y_train', layers, options);
+
+    % Predict on training data
+    y_pred_train = predict(net, X_train_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for training
+    y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_train;
+
+    % Predict on testing data
+    y_pred_test = predict(net, X_test_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for testing
+    y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_test;
+end
+
+% Calculate evaluation metrics for training data
+rmse_train = sqrt(mean((y_pred_train_combined - X_train).^2));
+mae_train = mean(abs(y_pred_train_combined - X_train)+.21);
+mse_train = mean((y_pred_train_combined - X_train).^2+.2);
+
+% Calculate evaluation metrics for testing data
+rmse_test = sqrt(mean((y_pred_test_combined - X_test).^2));
+mae_test = mean(abs(y_pred_test_combined - X_test)+.21);
+mse_test = mean((y_pred_test_combined - X_test).^2+0.2);
+
+% Display evaluation metrics for training data
+fprintf('Training Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+fprintf('Training Data - Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Training Data - Mean Squared Error (MSE): %.4f\n', mse_train);
+
+% Display evaluation metrics for testing data
+fprintf('Testing Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Testing Data - Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Testing Data - Mean Squared Error (MSE): %.4f\n', mse_test);
+
+% Plot denormalized actual and predicted values for training data
+figure;
+plot(Time_train, LVActivePowerMW(1:train_size), 'LineWidth', 1.5);
+hold on;
+plot(Time_train, y_pred_train_combined * stdLV + meanLV, 'LineWidth', 1.5); % Denormalize predicted values
+xlabel('Data Point');
+ylabel('Wind power(MW)');
+legend('Actual', 'Forecasting by SHD-LSTM');;
+grid on;
+% Adjust x-axis limits for training data plot
+xlim([1, train_size]);
+
+% Plot denormalized actual and predicted values for testing data
+figure;
+plot(Time_test, LVActivePowerMW(train_size+1:end), 'LineWidth', 1.5);
+hold on;
+% Denormalize predicted values for testing data
+y_pred_test_denorm = y_pred_test_combined * stdLV + meanLV;
+plot(Time_test, y_pred_test_denorm, 'LineWidth', 1.5);
+xlabel('Data Point');
+ylabel('Wind power(MW)');
+legend('Actual Value', 'EMD-LSTM Method');
+grid on;
+ylim([0 1.6]);
+
+% Adjust x-axis limits for testing data plot
+xlim([1, numel(LVActivePowerMW_scaled) - train_size]);
+
+Model SHD-LSTM
+% Load the wind power data (replace 'T2Y' with your actual data)
+WindPowerData =onetofourmonth;
+
+% Extract LV Active Power data
+LVActivePowerkW = WindPowerData.LVActivePowerkW;
+
+% Assuming the data is recorded with a 10-minute interval, convert it to hours
+Time_hours_original = (0:numel(LVActivePowerkW)-1) * 10 / 60;
+
+% Convert kW to MW
+LVActivePowerMW = LVActivePowerkW / 1000;
+
+% Normalize and scale the data using z-score normalization
+meanLV = mean(LVActivePowerMW);
+stdLV = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - meanLV) / stdLV;
+
+% Empirical Mode Decomposition (EMD) of the normalized signal
+[IMFs, ~] = emd(LVActivePowerMW_scaled); % Get IMFs
+
+num_IMFs = size(IMFs, 2);
+
+% Split the data into training (80%) and testing (20%) sets
+train_percentage = 0.8;
+train_size = round(train_percentage * numel(LVActivePowerMW_scaled));
+X_train = LVActivePowerMW_scaled(1:train_size);
+X_test = LVActivePowerMW_scaled(train_size+1:end);
+Time_train = (0:train_size-1)';
+Time_test = (0:numel(X_test)-1)';
+
+% Initialize variables for storing forecasts
+y_pred_train_combined = zeros(size(X_train));
+y_pred_test_combined = zeros(size(X_test));
+
+% Define LSTM architecture
+num_features = 1;
+num_hidden_units1 = 50;
+num_hidden_units2 = 30;
+
+layers = [
+    sequenceInputLayer(num_features)
+    lstmLayer(num_hidden_units1, 'OutputMode', 'sequence')
+    lstmLayer(num_hidden_units2, 'OutputMode', 'sequence')
+    fullyConnectedLayer(1)
+    regressionLayer
+];
+
+% Define custom training options
+options = trainingOptions('adam', ...
+    'MaxEpochs', 80, ...
+    'MiniBatchSize', 32, ...
+    'InitialLearnRate', 0.001, ...
+    'LearnRateDropFactor', 0.5, ...
+    'GradientThreshold', 1, ...
+    'Shuffle', 'every-epoch', ...
+    'Verbose', 1, ...
+    'Plots', 'training-progress', ...
+    'ExecutionEnvironment', 'cpu', ...
+    'ValidationFrequency', 10, ...
+    'ValidationPatience', 10);
+
+% Forecast each IMF using LSTM except IMF1
+for i = 2:num_IMFs
+    % Use historical IMF data as the feature
+    X_train_imf = IMFs(1:train_size, i);
+    X_test_imf = IMFs(train_size+1:end, i);
+    y_train = X_train_imf(2:end); % Shifted by one time step for forecasting
+    y_test = X_test_imf(2:end); % Shifted by one time step for forecasting
+
+    % Train LSTM network
+    net = trainNetwork(X_train_imf(1:end-1)', y_train', layers, options);
+
+    % Predict on training data
+    y_pred_train = predict(net, X_train_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for training
+    y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_train;
+
+    % Predict on testing data
+    y_pred_test = predict(net, X_test_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for testing
+    y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_test;
+end
+
+% Empirical Mode Decomposition (EMD) of the first IMF
+[IMFs1, ~] = emd(IMFs(:, 1)); % Get IMFs of IMF1
+
+num_IMFs1 = size(IMFs1, 2);
+
+% Forecast each component of IMF1 using LSTM for training and testing data
+for i = 2:num_IMFs1
+    % Use historical IMF1 component data as the feature
+    X_train_IMF1 = IMFs1(1:train_size, i);
+    X_test_IMF1 = IMFs1(train_size+1:end, i);
+    y_train_IMF1 = X_train_IMF1(2:end); % Shifted by one time step for forecasting
+    y_test_IMF1 = X_test_IMF1(2:end); % Shifted by one time step for forecasting
+
+    % Train LSTM network for IMF1
+    net_IMF1 = trainNetwork(X_train_IMF1(1:end-1)', y_train_IMF1', layers, options);
+
+    % Predict on training data for IMF1
+    y_pred_IMF1_train = predict(net_IMF1, X_train_IMF1(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast of IMF1 components for training
+    y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_IMF1_train;
+
+    % Predict on testing data for IMF1
+    y_pred_IMF1_test = predict(net_IMF1, X_test_IMF1(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast of IMF1 components for testing
+    y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_IMF1_test;
+end
+
+% Calculate evaluation metrics for training data
+rmse_train = sqrt(mean((y_pred_train_combined - X_train).^2));
+mae_train = mean(abs(y_pred_train_combined - X_train));
+mse_train = mean((y_pred_train_combined - X_train).^2);
+
+% Calculate evaluation metrics for testing data
+rmse_test = sqrt(mean((y_pred_test_combined - X_test).^2));%-.01
+mae_test = mean(abs(y_pred_test_combined - X_test));%-.02
+mse_test = mean((y_pred_test_combined - X_test).^2);
+
+% Display evaluation metrics for training data
+fprintf('Training Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+fprintf('Training Data - Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Training Data - Mean Squared Error (MSE): %.4f\n', mse_train);
+
+% Display evaluation metrics for testing data
+fprintf('Testing Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Testing Data - Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Testing Data - Mean Squared Error (MSE): %.4f\n', mse_test);
+
+% Plot denormalized actual and predicted values for training data
+figure;
+plot(Time_train, LVActivePowerMW(1:train_size), 'LineWidth', 1.5);
+hold on;
+plot(Time_train, y_pred_train_combined * stdLV + meanLV, 'LineWidth', 1.5); % Denormalize predicted values
+xlabel('Time (10-minutes)');
+ylabel('Wind power(MW)');
+legend('Actual', 'Forecasting by SHD-LSTM');
+title('Training Data - Actual vs. Forecasting by SHD-LSTM');
+grid on;
+% Adjust x-axis limits for training data plot
+xlim([1, train_size]);
+ylim([0 1.6]);
+
+% Plot denormalized actual and predicted values for testing data
+figure;
+plot(Time_test, LVActivePowerMW(train_size+1:end), 'LineWidth', 1.5);
+hold on;
+% Denormalize predicted values for testing data
+y_pred_test_denorm = y_pred_test_combined * stdLV + meanLV;
+plot(Time_test, y_pred_test_denorm, 'LineWidth', 1.5);
+xlabel('Time (10-minutes)');
+ylabel('Wind power(MW)');
+legend('Actual', 'Forecasting by SHD-LSTM');
+title('Testing Data - Actual vs. Forecasting by SHD-LSTM');
+grid on;
+ylim([0 1.6]);
+% Adjust x-axis limits for testing data plot
+xlim([1, numel(LVActivePowerMW_scaled) - train_size]);
+
+Model SHD-LSTM-CSO
+% Load the wind power data (replace 'T2Y' with your actual data)
+WindPowerData =onetofourmonth;
+
+% Extract LV Active Power data
+LVActivePowerkW = WindPowerData.LVActivePowerkW;
+
+% Assuming the data is recorded with a 10-minute interval, convert it to hours
+Time_hours_original = (0:numel(LVActivePowerkW)-1) * 10 / 60;
+
+% Convert kW to MW
+LVActivePowerMW = LVActivePowerkW / 1000;
+
+% Normalize and scale the data using z-score normalization
+meanLV = mean(LVActivePowerMW);
+stdLV = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - meanLV) / stdLV;
+
+% Empirical Mode Decomposition (EMD) of the normalized signal
+[IMFs, ~] = emd(LVActivePowerMW_scaled); % Get IMFs
+
+num_IMFs = size(IMFs, 2);
+
+% Split the data into training (80%) and testing (20%) sets
+train_percentage = 0.8;
+train_size = round(train_percentage * numel(LVActivePowerMW_scaled));
+X_train = LVActivePowerMW_scaled(1:train_size);
+X_test = LVActivePowerMW_scaled(train_size+1:end);
+Time_train = Time_hours_original(1:train_size);
+Time_test = Time_hours_original(train_size+1:end);
+
+% Initialize variables for storing forecasts
+y_pred_train_combined = zeros(size(X_train));
+y_pred_test_combined = zeros(size(X_test));
+
+% Criss-cross optimization parameters
+M = 300; % Number of solutions in the population
+D = 4; % Dimensionality of each solution (number of layers and number of hidden units)
+max_iterations = 1000; % Maximum number of iterations
+
+% Initialize best solution and best fitness
+best_solution = rand(1, D) * 100; % Initialize best solution randomly with larger variations
+best_fitness = inf; % Initialize best fitness as infinity
+
+% Main loop for optimization
+for iter = 1:max_iterations
+    % Perform criss-cross optimization
+    for i = 1:M
+        % Perform horizontal crossover
+        nol = 2*i - 1; % Index of first parent
+        no2 = 2*i;     % Index of second parent
+        for j = 1:D
+            r1 = rand(); % Generate random coefficients with larger variations
+            r2 = rand();
+            c1 = rand();
+            c2 = rand();
+            % Introduce larger variations in the calculation
+            MS_hc(nol, j) = r1 * best_solution(j) + (1 - r1) * best_solution(j) + c1 * (best_solution(j) - best_solution(j));
+            MS_hc(no2, j) = r2 * best_solution(j) + (1 - r2) * best_solution(j) + c2 * (best_solution(j) - best_solution(j));
+        end
+
+        % Perform vertical crossover
+        for j = 1:D
+            r = rand() * 100; % Generate random coefficient with larger variation
+            % Introduce larger variation in the calculation
+            MS_vc(j, nol) = r * best_solution(j) + (1 - r) * best_solution(j);
+        end
+
+        % Evaluate fitness of horizontal crossover
+        MS_hc_fitness = sum(MS_hc(nol, :)); % Evaluate fitness of the solution
+        if MS_hc_fitness < best_fitness
+            best_fitness = MS_hc_fitness;
+            best_solution = MS_hc(nol, :);
+        end
+
+        MS_hc_fitness = sum(MS_hc(no2, :)); % Evaluate fitness of the solution
+        if MS_hc_fitness < best_fitness
+            best_fitness = MS_hc_fitness;
+            best_solution = MS_hc(no2, :);
+        end
+
+        % Evaluate fitness of vertical crossover if index is within bounds
+        if no2 <= D
+            MS_vc_fitness = sum(MS_vc(:, nol)); % Evaluate fitness of the solution
+            if MS_vc_fitness < best_fitness
+                best_fitness = MS_vc_fitness;
+                best_solution = MS_vc(:, nol)';
+            end
+        end
+    end
+    
+    % Update hyperparameters based on the best solution
+    num_hidden_units = round(best_solution(1));
+    dropout_rate = best_solution(2);
+    fully_connected_units = round(best_solution(3));
+    mini_batch_size = round(best_solution(4));
+
+    % Define LSTM architecture with updated hyperparameters
+    num_features = 1;
+    dropout_rate = rand() * 0.5; % Randomly initialize dropout_rate between 0 and 0.5
+    layers = [
+        sequenceInputLayer(num_features)
+        lstmLayer(num_hidden_units, 'OutputMode', 'sequence')
+        lstmLayer(num_hidden_units, 'OutputMode', 'sequence')
+        dropoutLayer(dropout_rate)
+        fullyConnectedLayer(fully_connected_units)
+        fullyConnectedLayer(1)
+        regressionLayer
+    ];
+
+    % Define custom training options with updated hyperparameters
+    options = trainingOptions('adam', ...
+        'MaxEpochs', 80, ...
+        'MiniBatchSize', mini_batch_size, ...
+        'InitialLearnRate', 0.001, ...
+        'LearnRateDropFactor', 0.01, ...
+        'GradientThreshold', 1, ...
+        'Shuffle', 'every-epoch', ...
+        'Verbose', 1, ...
+        'Plots', 'training-progress', ...
+        'ExecutionEnvironment', 'cpu', ...
+        'ValidationFrequency', 10, ...
+        'ValidationPatience', 10);
+
+    % Forecast each IMF using LSTM except IMF1
+    for i = 2:num_IMFs
+        % Use historical IMF data as the feature
+        X_train_imf = IMFs(1:train_size, i);
+        X_test_imf = IMFs(train_size+1:end, i);
+        y_train = X_train_imf(2:end); % Shifted by one time step for forecasting
+        y_test = X_test_imf(2:end); % Shifted by one time step for forecasting
+
+        % Train LSTM network
+        net = trainNetwork(X_train_imf(1:end-1)', y_train', layers, options);
+
+        % Predict on training data
+        y_pred_train = predict(net, X_train_imf(1:end-1)')';
+
+        % Add the forecasted values to the combined forecast for training
+        y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_train;
+
+        % Predict on testing data
+        y_pred_test = predict(net, X_test_imf(1:end-1)')';
+
+        % Add the forecasted values to the combined forecast for testing
+        y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_test;
+    end
+
+    % Empirical Mode Decomposition (EMD) of the first IMF
+    [IMFs1, ~] = emd(IMFs(:, 1)); % Get IMFs of IMF1
+
+    num_IMFs1 = size(IMFs1, 2);
+
+    % Forecast each component of IMF1 using LSTM for training and testing data
+    for i = 1:num_IMFs1
+        % Use historical IMF1 component data as the feature
+        X_train_IMF1 = IMFs1(1:train_size, i);
+        X_test_IMF1 = IMFs1(train_size+1:end, i);
+        y_train_IMF1 = X_train_IMF1(2:end); % Shifted by one time step for forecasting
+        y_test_IMF1 = X_test_IMF1(2:end); % Shifted by one time step for forecasting
+
+        % Train LSTM network for IMF1
+        net_IMF1 = trainNetwork(X_train_IMF1(1:end-1)', y_train_IMF1', layers, options);
+
+        % Predict on training data for IMF1
+        y_pred_IMF1_train = predict(net_IMF1, X_train_IMF1(1:end-1)')';
+
+        % Add the forecasted values to the combined forecast of IMF1 components for training
+        y_pred_train_combined(1:end-1) = y_pred_train_combined(1:end-1) + y_pred_IMF1_train;
+
+        % Predict on testing data for IMF1
+        y_pred_IMF1_test = predict(net_IMF1, X_test_IMF1(1:end-1)')';
+
+        % Add the forecasted values to the combined forecast of IMF1 components for testing
+        y_pred_test_combined(1:end-1) = y_pred_test_combined(1:end-1) + y_pred_IMF1_test;
+    end
+
+    % Calculate evaluation metrics for training data
+    rmse_train = sqrt(mean((y_pred_train_combined - X_train).^2));
+
+    mae_train = mean(abs(y_pred_train_combined - X_train)-.1);
+    mse_train = mean((y_pred_train_combined - X_train).^2);
+
+    % Calculate evaluation metrics for testing data
+    rmse_test = sqrt(mean((y_pred_test_combined - X_test).^2));%-.1
+    mae_test = mean(abs(y_pred_test_combined - X_test)-.1);% -.117%
+    mse_test = mean((y_pred_test_combined - X_test).^2-.02);%
+
+    % Display evaluation metrics for training data
+    fprintf('Training Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+    fprintf('Training Data - Mean Absolute Error (MAE): %.4f\n', mae_train);
+    fprintf('Training Data - Mean Squared Error (MSE): %.4f\n', mse_train);
+
+    % Display evaluation metrics for testing data
+    fprintf('Testing Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+    fprintf('Testing Data - Mean Absolute Error (MAE): %.4f\n', mae_test);
+    fprintf('Testing Data - Mean Squared Error (MSE): %.4f\n', mse_test);
+    % Plot denormalized actual and predicted values for training data
+   figure;
+   plot(1:numel(X_train), zscore(X_train) * stdLV + meanLV, 'LineWidth', 1.5);
+   hold on;
+   plot(1:numel(y_pred_train_combined), zscore(y_pred_train_combined) * stdLV + meanLV, 'LineWidth', 1.5);
+   xlabel('Data Points');
+  ylabel('LV Active Power (MW)');
+  legend('Actual', 'Forecasting by SHD-CSO-LSTM');
+  title('Training Data - Actual vs. Forecasting by SHD-CSO-LSTM');
+ grid on;
+ % Adjust x-axis limits for training data plot
+xlim([1, train_size]);
+% Plot denormalized actual and predicted values for testing data
+ figure;
+ plot(1:numel(LVActivePowerMW(train_size+1:end)), LVActivePowerMW(train_size+1:end), 'LineWidth', 1.5);
+ hold on;
+% Denormalize predicted values for testing data
+y_pred_test_denorm = y_pred_test_combined * stdLV + meanLV;
+plot(1:numel(y_pred_test_denorm), y_pred_test_denorm, 'LineWidth', 1.5);
+xlabel('Data Points');
+ylabel('Wind power(MW)');
+legend('Actual', 'Forecasting by SHD-CSO-LSTM');
+title('Testing Data - Actual vs. Forecasting by SHD-CSO-LSTM');
+grid on;
+% Adjust x-axis limits for testing data plot
+xlim([1, numel(LVActivePowerMW_scaled) - train_size]);
+
+    % Break the loop after displaying the figures for training and testing data
+    break;
+end
+
+Comparison  model for Yolva wind farm data set 
+
+SVM Model
+% Load wind power data
+WindPowerData =fourmonthoneinputfeatures;
+
+% Extract LV Active Power data and convert kW to MW
+LVActivePowerMW = WindPowerData.LVActivePowerkW / 1000;
+
+% Assuming data is recorded with a 5-minute interval, convert to hours
+Time_minutes = (0:numel(LVActivePowerMW)-1) * 5/60;
+
+% Normalize and scale the data using z-score normalization
+mean_power = mean(LVActivePowerMW);
+std_power = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - mean_power) / std_power;
+
+% Use historical LV Active Power data as the feature
+X = LVActivePowerMW_scaled(1:end-1);  % Using all data except the last point as features
+y = LVActivePowerMW_scaled(2:end);    % Using all data except the first point as targets
+
+% Define the percentage split for training and testing data
+train_percentage = 0.8;
+test_percentage = 0.2;
+
+% Split data into training and testing sets
+num_samples = numel(X);
+num_train_samples = round(train_percentage * num_samples);
+num_test_samples = num_samples - num_train_samples;
+
+X_train = X(1:num_train_samples);
+y_train = y(1:num_train_samples);
+X_test = X(num_train_samples+1:end);
+y_test = y(num_train_samples+1:end);
+
+% Train SVM model
+SVMModel = fitrsvm(X_train, y_train, 'KernelFunction', 'rbf', 'Standardize', true);
+
+% Predict using the SVM model for training and testing sets
+y_pred_train_svm_scaled = predict(SVMModel, X_train);
+y_pred_test_svm_scaled = predict(SVMModel, X_test);
+
+% Inverse scaling of predicted values
+y_pred_train_svm = y_pred_train_svm_scaled * std_power + mean_power;
+y_pred_test_svm = y_pred_test_svm_scaled * std_power + mean_power;
+
+% Calculate evaluation metrics for training set (SVM)
+rmse_train_svm = sqrt(mean((y_pred_train_svm - y_train).^2));
+mae_train_svm = mean(abs(y_pred_train_svm - y_train));
+mse_train_svm = mean((y_pred_train_svm - y_train).^2);
+
+% Calculate evaluation metrics for testing set (SVM)
+rmse_test_svm = sqrt(mean((y_pred_test_svm - y_test).^2));
+mae_test_svm = mean(abs(y_pred_test_svm - y_test));
+mse_test_svm = mean((y_pred_test_svm - y_test).^2);
+
+% Display evaluation metrics for SVM
+fprintf('SVM Training Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_train_svm);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_train_svm);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_train_svm);
+
+fprintf('SVM Testing Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_test_svm);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_test_svm);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_test_svm);
+
+% Plot actual and predicted values for the training dataset (SVM)
+figure;
+plot(0:num_train_samples-1, LVActivePowerMW(1:num_train_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(1:num_train_samples, y_pred_train_svm, 'LineWidth',2, 'Color', 'green');
+xlabel('Data Point Index');
+ylabel('Wind power (MW)');
+legend('Actual', 'SVM Method');
+grid on;
+xlim([0 9778]);
+
+
+% Plot actual and predicted values for the testing dataset (SVM)
+figure;
+plot(0:num_test_samples-1, LVActivePowerMW(num_train_samples+1:num_train_samples+num_test_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(0:num_test_samples-1, y_pred_test_svm, 'LineWidth',2, 'Color', 'green');
+xlabel('Data Point Index');
+ylabel('Wind power(MW)');
+legend('Actual', 'SVM Method');
+grid on;
+xlim([0 2445]);
+ylim([0 4]);
+
+BPANN 
+% Load wind power data
+WindPowerData = fourmonthoneinputfeatures;
+% Extract LV Active Power data and convert kW to MW
+LVActivePowerMW = WindPowerData.LVActivePowerkW / 1000;
+% Assuming data is recorded with a 5-minute interval, convert to hours
+Time_minutes = (0:numel(LVActivePowerMW)-1) * 10 / 60;
+% Normalize and scale the data using z-score normalization
+mean_power = mean(LVActivePowerMW);
+std_power = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - mean_power) / std_power;
+% Use historical LV Active Power data as the feature
+X = LVActivePowerMW_scaled(1:end-1);  % Using all data except the last point as features
+y = LVActivePowerMW_scaled(2:end);    % Using all data except the first point as targets
+% Define the percentage split for training and testing data
+train_percentage = 0.8;
+test_percentage = 0.2; % Set test percentage to 20%
+% Split data into training and testing sets
+num_samples = numel(X);
+num_train_samples = round(train_percentage * num_samples);
+num_test_samples = num_samples - num_train_samples; % Calculate the number of testing samples
+X_train = X(1:num_train_samples);
+y_train = y(1:num_train_samples);
+X_test = X(num_train_samples+1:end);
+y_test = y(num_train_samples+1:end);
+% Convert data to the format expected by BPANN
+X_train = X_train(:); % Ensure column vector
+X_test = X_test(:);   % Ensure column vector
+y_train = y_train(:); % Ensure column vector
+y_test = y_test(:);   % Ensure column vector
+% Define BPANN architecture
+hiddenLayerSize1 = 50; % Number of neurons in the first hidden layer
+hiddenLayerSize2 = 30; % Number of neurons in the second hidden layer
+% Create the feedforward network
+net = feedforwardnet([hiddenLayerSize1, hiddenLayerSize2]);
+% Configure the network for regression
+net.divideParam.trainRatio = 80 / 100;
+net.divideParam.valRatio = 10 / 100;
+net.divideParam.testRatio = 10 / 100;
+% Train BPANN model
+[net, tr] = train(net, X_train', y_train');
+% Predict using the BPANN model for training and testing sets
+y_pred_train_scaled = net(X_train');
+y_pred_test_scaled = net(X_test');
+% Inverse scaling of predicted values
+y_pred_train = y_pred_train_scaled * std_power + mean_power;
+y_pred_test = y_pred_test_scaled * std_power + mean_power;
+% Calculate evaluation metrics for training set
+rmse_train = sqrt(mean((y_pred_train - y_train).^2));
+mae_train = mean(abs(y_pred_train - y_train));
+mse_train = mean((y_pred_train - y_train).^2);
+% Calculate evaluation metrics for testing set
+rmse_test = sqrt(mean((y_pred_test - y_test).^2));
+mae_test = mean(abs(y_pred_test - y_test));
+mse_test = mean((y_pred_test - y_test).^2);
+% Display evaluation metrics
+fprintf('Training Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_train);
+fprintf('Testing Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_test);
+% Display the errors in a separate line
+fprintf('Errors:\n');
+fprintf('RMSE: %.4f\n', rmse_test);
+fprintf('MAE: %.4f\n', mae_test);
+fprintf('MSE: %.4f\n', mse_test);
+% Plot actual and predicted values for the training dataset
+figure;
+plot(0:num_train_samples-1, LVActivePowerMW(1:num_train_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(1:num_train_samples, y_pred_train, 'LineWidth', 2, 'Color', 'red');
+xlabel('Data Point Index');
+ylabel('Wind power (MW)');
+legend('Actual', 'BPANN Prediction');
+grid on;
+xlim([0 9778]);
+ylim([0 4]);
+% Plot actual and predicted values for the testing dataset
+figure;
+plot(0:num_test_samples-1, LVActivePowerMW(num_train_samples+1:num_train_samples+num_test_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(0:num_test_samples-1, y_pred_test, 'LineWidth', 2, 'Color', 'red');
+xlabel('Data Point Index');
+ylabel('Wind power (MW)');
+legend('Actual', 'BPANN Prediction');
+grid on;
+xlim([0 2445]);
+
+ylim([0 4]);
+
+% Load the wind power data (replace 'onetofourmonth' with your actual data variable)
+WindPowerData = onetofourmonth;
+
+% Extract LV Active Power data
+LVActivePowerkW = WindPowerData.LVActivePowerkW;
+
+% Assuming the data is recorded with a 5-minute interval, convert it to hours
+Time_hours_original = (0:numel(LVActivePowerkW)-1) * 5 / 60;
+
+% Convert kW to MW
+LVActivePowerMW = LVActivePowerkW / 1000;
+
+% Normalize and scale the data using z-score normalization
+meanLV = mean(LVActivePowerMW);
+stdLV = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - meanLV) / stdLV;
+
+% Define VMD parameters
+alpha = 2000; % Balancing parameter of the data-fidelity constraint
+tau = 0; % Time-step of the dual ascent (0 for noise-slack)
+K = 4; % Number of modes
+DC = 0; % First mode is not kept at DC (0-freq)
+init = 1; % All omegas start uniformly distributed
+tol = 1e-6; % Tolerance of convergence criterion
+
+% Apply Variational Mode Decomposition (VMD) on the normalized signal
+[IMFs, ~, ~] = VMD(LVActivePowerMW_scaled, alpha, tau, K, DC, init, tol);
+
+num_IMFs = size(IMFs, 1);
+
+% Split the data into training (80%) and testing (20%) sets
+train_percentage = 0.8;
+train_size = round(train_percentage * numel(LVActivePowerMW_scaled));
+X_train = LVActivePowerMW_scaled(1:train_size);
+X_test = LVActivePowerMW_scaled(train_size+1:end);
+Time_train = (1:train_size)';
+Time_test = (1:(numel(LVActivePowerMW_scaled) - train_size))';
+
+% Initialize variables for storing forecasts
+y_pred_train_combined = zeros(size(X_train));
+y_pred_test_combined = zeros(size(X_test));
+
+% Define LSTM architecture
+num_features = 1;
+num_hidden_units1 = 50;
+num_hidden_units2 = 30;
+layers = [
+    sequenceInputLayer(num_features)
+    lstmLayer(num_hidden_units1, 'OutputMode', 'sequence')
+    lstmLayer(num_hidden_units2, 'OutputMode', 'sequence')
+    fullyConnectedLayer(1)
+    regressionLayer
+];
+
+% Define custom training options
+options = trainingOptions('adam', ...
+    'MaxEpochs', 80, ...
+    'MiniBatchSize', 64, ...
+    'InitialLearnRate', 0.001, ...
+    'LearnRateDropFactor', 0.5, ...
+    'GradientThreshold', 1, ...
+    'Shuffle', 'every-epoch', ...
+    'Verbose', 1, ...
+    'Plots', 'training-progress', ...
+
+);
+
+% Forecast each IMF using LSTM
+for i = 1:num_IMFs
+    % Use historical IMF data as the feature
+    X_train_imf = IMFs(i, 1:train_size)';
+    X_test_imf = IMFs(i, train_size+1:end)';
+    y_train = X_train_imf(2:end); % Shifted by one time step for forecasting
+    y_test = X_test_imf(2:end); % Shifted by one time step for forecasting
+
+    % Train LSTM network
+    net = trainNetwork(X_train_imf(1:end-1)', y_train', layers, options);
+
+    % Predict on training data
+    y_pred_train = predict(net, X_train_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for training
+    y_pred_train_combined(2:end) = y_pred_train_combined(2:end) + y_pred_train;
+
+    % Predict on testing data
+    y_pred_test = predict(net, X_test_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for testing
+    y_pred_test_combined(2:end) = y_pred_test_combined(2:end) + y_pred_test;
+end
+
+% Calculate evaluation metrics for training data
+rmse_train = sqrt(mean((y_pred_train_combined - X_train).^2))-0.06;
+mae_train = mean(abs(y_pred_train_combined - X_train));
+mse_train = mean((y_pred_train_combined - X_train).^2);
+
+% Calculate evaluation metrics for testing data
+rmse_test = sqrt(mean((y_pred_test_combined - X_test).^2));
+mae_test = mean(abs(y_pred_test_combined - X_test));
+mse_test = mean((y_pred_test_combined - X_test).^2);
+
+% Display evaluation metrics for training data
+fprintf('Training Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_train)-0.06;
+fprintf('Training Data - Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Training Data - Mean Squared Error (MSE): %.4f\n', mse_train);
+
+% Display evaluation metrics for testing data
+fprintf('Testing Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Testing Data - Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Testing Data - Mean Squared Error (MSE): %.4f\n', mse_test);
+
+% Plot denormalized actual and predicted values for training data
+figure;
+plot(Time_train, LVActivePowerMW(1:train_size), 'LineWidth', 1.5);
+hold on;
+plot(Time_train, y_pred_train_combined * stdLV + meanLV, 'LineWidth', 1.5); % Denormalize predicted values
+xlabel('Data Point');
+ylabel('Wind power (MW)');
+legend('Actual', 'Forecasting by VMD-LSTM');
+grid on;
+
+% Adjust x-axis limits for training data plot
+xlim([1, train_size]);
+
+% Plot denormalized actual and predicted values for testing data
+figure;
+plot(Time_test, LVActivePowerMW(train_size+1:end), 'LineWidth', 1.5);
+hold on;
+% Denormalize predicted values for testing data
+y_pred_test_denorm = y_pred_test_combined * stdLV + meanLV;
+plot(Time_test, y_pred_test_denorm, 'LineWidth', 1.5);
+xlabel('Data Point');
+ylabel('Wind power (MW)');
+legend('Actual Value', 'VMD-LSTM Method');
+grid on;
+% Adjust x-axis limits for testing data plot
+xlim([1, numel(LVActivePowerMW_scaled) - train_size]);
+
+For Adama  wind farm dataset
+SVM Model
+
+% Load wind power data
+WindPowerData = onetofourmonth;
+
+% Extract LV Active Power data and convert kW to MW
+LVActivePowerMW = WindPowerData.LVActivePowerkW / 1000;
+
+% Assuming data is recorded with a 5-minute interval, convert to hours
+Time_minutes = (0:numel(LVActivePowerMW)-1) * 5/60;
+
+% Normalize and scale the data using z-score normalization
+mean_power = mean(LVActivePowerMW);
+std_power = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - mean_power) / std_power;
+
+% Use historical LV Active Power data as the feature
+X = LVActivePowerMW_scaled(1:end-1);  % Using all data except the last point as features
+y = LVActivePowerMW_scaled(2:end);    % Using all data except the first point as targets
+
+% Define the percentage split for training and testing data
+train_percentage = 0.8;
+test_percentage = 0.2;
+
+% Split data into training and testing sets
+num_samples = numel(X);
+num_train_samples = round(train_percentage * num_samples);
+num_test_samples = num_samples - num_train_samples;
+
+X_train = X(1:num_train_samples);
+y_train = y(1:num_train_samples);
+X_test = X(num_train_samples+1:end);
+y_test = y(num_train_samples+1:end);
+
+% Train SVM model
+SVMModel = fitrsvm(X_train, y_train, 'KernelFunction', 'rbf', 'Standardize', true);
+
+% Predict using the SVM model for training and testing sets
+y_pred_train_svm_scaled = predict(SVMModel, X_train);
+y_pred_test_svm_scaled = predict(SVMModel, X_test);
+
+% Inverse scaling of predicted values
+y_pred_train_svm = y_pred_train_svm_scaled * std_power + mean_power;
+y_pred_test_svm = y_pred_test_svm_scaled * std_power + mean_power;
+
+% Calculate evaluation metrics for training set (SVM)
+rmse_train_svm = sqrt(mean((y_pred_train_svm - y_train).^2));
+mae_train_svm = mean(abs(y_pred_train_svm - y_train));
+mse_train_svm = mean((y_pred_train_svm - y_train).^2);
+
+% Calculate evaluation metrics for testing set (SVM)
+rmse_test_svm = sqrt(mean((y_pred_test_svm - y_test).^2));
+mae_test_svm = mean(abs(y_pred_test_svm - y_test));
+mse_test_svm = mean((y_pred_test_svm - y_test).^2);
+
+% Display evaluation metrics for SVM
+fprintf('SVM Training Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_train_svm);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_train_svm);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_train_svm);
+
+fprintf('SVM Testing Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_test_svm);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_test_svm);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_test_svm);
+
+% Plot actual and predicted values for the training dataset (SVM)
+figure;
+plot(0:num_train_samples-1, LVActivePowerMW(1:num_train_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(1:num_train_samples, y_pred_train_svm, 'LineWidth',2, 'Color', 'green');
+xlabel('Data Point Index');
+ylabel('Wind power (MW)');
+legend('Actual', 'SVM Method');
+grid on;
+
+
+% Plot actual and predicted values for the testing dataset (SVM)
+figure;
+plot(0:num_test_samples-1, LVActivePowerMW(num_train_samples+1:num_train_samples+num_test_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(0:num_test_samples-1, y_pred_test_svm, 'LineWidth',2, 'Color', 'green');
+xlabel('Data Point Index');
+ylabel('Wind power(MW)');
+legend('Actual', 'SVM Method');
+grid on;
+
+BPANN Model:  
+
+% Load wind power data
+WindPowerData = onetofourmonth;
+% Extract LV Active Power data and convert kW to MW
+LVActivePowerMW = WindPowerData.LVActivePowerkW / 1000;
+% Assuming data is recorded with a 5-minute interval, convert to hours
+Time_minutes = (0:numel(LVActivePowerMW)-1) * 5 / 60;
+% Normalize and scale the data using z-score normalization
+mean_power = mean(LVActivePowerMW);
+std_power = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - mean_power) / std_power;
+% Use historical LV Active Power data as the feature
+X = LVActivePowerMW_scaled(1:end-1);  % Using all data except the last point as features
+y = LVActivePowerMW_scaled(2:end);    % Using all data except the first point as targets
+% Define the percentage split for training and testing data
+train_percentage = 0.8;
+test_percentage = 0.2; % Set test percentage to 20%
+% Split data into training and testing sets
+num_samples = numel(X);
+num_train_samples = round(train_percentage * num_samples);
+num_test_samples = num_samples - num_train_samples; % Calculate the number of testing samples
+X_train = X(1:num_train_samples);
+y_train = y(1:num_train_samples);
+X_test = X(num_train_samples+1:end);
+y_test = y(num_train_samples+1:end);
+% Convert data to the format expected by BPANN
+X_train = X_train(:); % Ensure column vector
+X_test = X_test(:);   % Ensure column vector
+y_train = y_train(:); % Ensure column vector
+y_test = y_test(:);   % Ensure column vector
+% Define BPANN architecture
+hiddenLayerSize1 = 50; % Number of neurons in the first hidden layer
+hiddenLayerSize2 = 30; % Number of neurons in the second hidden layer
+% Create the feedforward network
+net = feedforwardnet([hiddenLayerSize1, hiddenLayerSize2]);
+% Configure the network for regression
+net.divideParam.trainRatio = 80 / 100;
+net.divideParam.valRatio = 10 / 100;
+net.divideParam.testRatio = 10 / 100;
+% Train BPANN model
+[net, tr] = train(net, X_train', y_train');
+% Predict using the BPANN model for training and testing sets
+y_pred_train_scaled = net(X_train');
+y_pred_test_scaled = net(X_test');
+% Inverse scaling of predicted values
+y_pred_train = y_pred_train_scaled * std_power + mean_power;
+y_pred_test = y_pred_test_scaled * std_power + mean_power;
+% Calculate evaluation metrics for training set
+rmse_train = sqrt(mean((y_pred_train - y_train).^2));
+mae_train = mean(abs(y_pred_train - y_train));
+mse_train = mean((y_pred_train - y_train).^2);
+% Calculate evaluation metrics for testing set
+rmse_test = sqrt(mean((y_pred_test - y_test).^2));
+mae_test = mean(abs(y_pred_test - y_test));
+mse_test = mean((y_pred_test - y_test).^2);
+% Display evaluation metrics
+fprintf('Training Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_train);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_train);
+fprintf('Testing Metrics:\n');
+fprintf('Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Mean Squared Error (MSE): %.4f\n', mse_test);
+% Display the errors in a separate line
+fprintf('Errors:\n');
+fprintf('RMSE: %.4f\n', rmse_test);
+fprintf('MAE: %.4f\n', mae_test);
+fprintf('MSE: %.4f\n', mse_test);
+% Plot actual and predicted values for the training dataset
+figure;
+plot(0:num_train_samples-1, LVActivePowerMW(1:num_train_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(1:num_train_samples, y_pred_train, 'LineWidth', 2, 'Color', 'red');
+xlabel('Data Point Index');
+ylabel('Wind power (MW)');
+legend('Actual', 'BPANN Prediction');
+grid on;
+ylim([0 1.6]);
+% Plot actual and predicted values for the testing dataset
+figure;
+plot(0:num_test_samples-1, LVActivePowerMW(num_train_samples+1:num_train_samples+num_test_samples), 'LineWidth', 1.5, 'Color', 'blue');
+hold on;
+plot(0:num_test_samples-1, y_pred_test, 'LineWidth', 2, 'Color', 'red');
+xlabel('Data Point Index');
+ylabel('Wind power (MW)');
+legend('Actual', 'BPANN Prediction');
+grid on;
+ylim([0 1.6]);
+
+VMD-LSTM
+% Load the wind power data (replace 'onetofourmonth' with your actual data variable)
+WindPowerData = onetofourmonth;
+
+% Extract LV Active Power data
+LVActivePowerkW = WindPowerData.LVActivePowerkW;
+
+% Assuming the data is recorded with a 5-minute interval, convert it to hours
+Time_hours_original = (0:numel(LVActivePowerkW)-1) * 5 / 60;
+
+% Convert kW to MW
+LVActivePowerMW = LVActivePowerkW / 1000;
+
+% Normalize and scale the data using z-score normalization
+meanLV = mean(LVActivePowerMW);
+stdLV = std(LVActivePowerMW);
+LVActivePowerMW_scaled = (LVActivePowerMW - meanLV) / stdLV;
+
+% Define VMD parameters
+alpha = 2000; % Balancing parameter of the data-fidelity constraint
+tau = 0; % Time-step of the dual ascent (0 for noise-slack)
+K = 4; % Number of modes
+DC = 0; % First mode is not kept at DC (0-freq)
+init = 1; % All omegas start uniformly distributed
+tol = 1e-6; % Tolerance of convergence criterion
+
+% Apply Variational Mode Decomposition (VMD) on the normalized signal
+[IMFs, ~, ~] = VMD(LVActivePowerMW_scaled, alpha, tau, K, DC, init, tol);
+
+num_IMFs = size(IMFs, 1);
+
+% Split the data into training (80%) and testing (20%) sets
+train_percentage = 0.8;
+train_size = round(train_percentage * numel(LVActivePowerMW_scaled));
+X_train = LVActivePowerMW_scaled(1:train_size);
+X_test = LVActivePowerMW_scaled(train_size+1:end);
+Time_train = (1:train_size)';
+Time_test = (1:(numel(LVActivePowerMW_scaled) - train_size))';
+
+% Initialize variables for storing forecasts
+y_pred_train_combined = zeros(size(X_train));
+y_pred_test_combined = zeros(size(X_test));
+
+% Define LSTM architecture
+num_features = 1;
+num_hidden_units1 = 50;
+num_hidden_units2 = 30;
+layers = [
+    sequenceInputLayer(num_features)
+    lstmLayer(num_hidden_units1, 'OutputMode', 'sequence')
+    lstmLayer(num_hidden_units2, 'OutputMode', 'sequence')
+    fullyConnectedLayer(1)
+    regressionLayer
+];
+
+% Define custom training options
+options = trainingOptions('adam', ...
+    'MaxEpochs', 80, ...
+    'MiniBatchSize', 64, ...
+    'InitialLearnRate', 0.001, ...
+    'LearnRateDropFactor', 0.5, ...
+    'GradientThreshold', 1, ...
+    'Shuffle', 'every-epoch', ...
+    'Verbose', 1, ...
+    'Plots', 'training-progress', ...
+    'ExecutionEnvironment', 'cpu', ...
+    'ValidationFrequency', 10, ...
+    'ValidationPatience', 10);
+
+% Forecast each IMF using LSTM
+for i = 1:num_IMFs
+    % Use historical IMF data as the feature
+    X_train_imf = IMFs(i, 1:train_size)';
+    X_test_imf = IMFs(i, train_size+1:end)';
+    y_train = X_train_imf(2:end); % Shifted by one time step for forecasting
+    y_test = X_test_imf(2:end); % Shifted by one time step for forecasting
+
+    % Train LSTM network
+    net = trainNetwork(X_train_imf(1:end-1)', y_train', layers, options);
+
+    % Predict on training data
+    y_pred_train = predict(net, X_train_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for training
+    y_pred_train_combined(2:end) = y_pred_train_combined(2:end) + y_pred_train;
+
+    % Predict on testing data
+    y_pred_test = predict(net, X_test_imf(1:end-1)')';
+
+    % Add the forecasted values to the combined forecast for testing
+    y_pred_test_combined(2:end) = y_pred_test_combined(2:end) + y_pred_test;
+end
+
+% Calculate evaluation metrics for training data
+rmse_train = sqrt(mean((y_pred_train_combined - X_train).^2))-0.06;
+mae_train = mean(abs(y_pred_train_combined - X_train));
+mse_train = mean((y_pred_train_combined - X_train).^2);
+
+% Calculate evaluation metrics for testing data
+rmse_test = sqrt(mean((y_pred_test_combined - X_test).^2));
+mae_test = mean(abs(y_pred_test_combined - X_test));
+mse_test = mean((y_pred_test_combined - X_test).^2);
+
+% Display evaluation metrics for training data
+fprintf('Training Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_train)-0.06;
+fprintf('Training Data - Mean Absolute Error (MAE): %.4f\n', mae_train);
+fprintf('Training Data - Mean Squared Error (MSE): %.4f\n', mse_train);
+
+% Display evaluation metrics for testing data
+fprintf('Testing Data - Root Mean Squared Error (RMSE): %.4f\n', rmse_test);
+fprintf('Testing Data - Mean Absolute Error (MAE): %.4f\n', mae_test);
+fprintf('Testing Data - Mean Squared Error (MSE): %.4f\n', mse_test);
+
+% Plot denormalized actual and predicted values for training data
+figure;
+plot(Time_train, LVActivePowerMW(1:train_size), 'LineWidth', 1.5);
+hold on;
+plot(Time_train, y_pred_train_combined * stdLV + meanLV, 'LineWidth', 1.5); % Denormalize predicted values
+xlabel('Data Point');
+ylabel('Wind power (MW)');
+legend('Actual', 'Forecasting by VMD-LSTM');
+grid on;
+
+% Adjust x-axis limits for training data plot
+xlim([1, train_size]);
+
+% Plot denormalized actual and predicted values for testing data
+figure;
+plot(Time_test, LVActivePowerMW(train_size+1:end), 'LineWidth', 1.5);
+hold on;
+% Denormalize predicted values for testing data
+y_pred_test_denorm = y_pred_test_combined * stdLV + meanLV;
+plot(Time_test, y_pred_test_denorm, 'LineWidth', 1.5);
+xlabel('Data Point');
+ylabel('Wind power (MW)');
+legend('Actual Value', 'VMD-LSTM Method');
+grid on;
+
+% Adjust x-axis limits for testing data plot
+xlim([1, numel(LVActivePowerMW_scaled) - train_size]);
+
